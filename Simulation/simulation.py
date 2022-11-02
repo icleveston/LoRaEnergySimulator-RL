@@ -47,6 +47,8 @@ def main(locations_file, payload_size=50, adr=True, confirmed_messages=True):
 
         if env.peek() < simulation_time:
             env.step()
+        else:
+            break
 
         # Get new state
         state = gateway
