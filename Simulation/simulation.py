@@ -1,7 +1,6 @@
 import datetime
 import os
 import pickle
-import pandas as pd
 import numpy as np
 import simpy
 from Framework import Location as loc
@@ -13,8 +12,6 @@ from Framework.LoRaParameters import LoRaParameters
 from Framework.Node import Node
 from Framework.SNRModel import SNRModel
 
-start_with_fixed_sf = False
-start_sf = 7
 scaling_factor = 0.1
 transmission_rate_id = str(scaling_factor)
 transmission_rate_bit_per_ms = scaling_factor * (12 * 8) / (
@@ -22,12 +19,8 @@ transmission_rate_bit_per_ms = scaling_factor * (12 * 8) / (
 simulation_time = 24 * 60 * 60 * 1000 / scaling_factor
 payload_sizes = range(5, 55, 5)
 path_loss_variances = 7.9  # [0, 5, 7.8, 15, 20]
-
-MAC_IMPROVEMENT = False
 MAX_DELAY_BEFORE_SLEEP_MS = 500
 MAX_DELAY_START_PER_NODE_MS = np.round(simulation_time / 10)
-track_changes = True
-load_prev_simulation_results = True
 
 
 def main(locations_file, payload_size=50, adr=True, confirmed_messages=True):
@@ -38,17 +31,26 @@ def main(locations_file, payload_size=50, adr=True, confirmed_messages=True):
         area_size = data['area_size']
         num_nodes = len(locations)
 
-    gateway_location = loc.Location(x=area_size // 2, y=area_size // 2, indoor=False)
-
     env, nodes, gateway, air_interface = create(locations,
                                                 p_size=payload_size,
                                                 sigma=path_loss_variances,
-                                                gateway_location=gateway_location,
+                                                area_size=area_size,
                                                 transmission_rate=transmission_rate_bit_per_ms,
                                                 confirmed_messages=confirmed_messages,
                                                 adr=adr)
 
-    env.run(until=simulation_time)
+    state = None
+    while True:
+
+        # Take action
+
+
+        if env.peek() < simulation_time:
+            env.step()
+
+        # Get new state
+        state = gateway
+        #gateway.log()
 
     # Process data
     mean_energy_per_bit_list = list()
@@ -83,34 +85,35 @@ def main(locations_file, payload_size=50, adr=True, confirmed_messages=True):
     pickle.dump(results, open(results_file, "wb"))
 
 
-def create(locs, p_size, sigma, gateway_location, transmission_rate, confirmed_messages, adr):
-    tx_power_mW = {2: 91.8, 5: 95.9, 8: 101.6, 11: 120.8, 14: 146.5}
-    rx_measurements = {'pre_mW': 8.2, 'pre_ms': 3.4, 'rx_lna_on_mW': 39,
-                       'rx_lna_off_mW': 34,
-                       'post_mW': 8.3, 'post_ms': 10.7}
+def create(locs, p_size, sigma, area_size, transmission_rate, confirmed_messages, adr):
 
     env = simpy.Environment()
 
+    gateway_location = loc.Location(x=area_size // 2, y=area_size // 2, indoor=False)
+
     gateway = Gateway(env, gateway_location, max_snr_adr=True, avg_snr_adr=False)
-    nodes = []
+
     air_interface = AirInterface(gateway, PropagationModel.LogShadow(std=sigma), SNRModel(), env)
+
+    nodes = []
+
+    tx_power_mW = {2: 91.8, 5: 95.9, 8: 101.6, 11: 120.8, 14: 146.5}
+    rx_measurements = {'pre_mW': 8.2, 'pre_ms': 3.4, 'rx_lna_on_mW': 39,
+                       'rx_lna_off_mW': 34, 'post_mW': 8.3, 'post_ms': 10.7}
 
     for node_id in range(len(locs)):
 
         energy_profile = EnergyProfile(5.7e-3, 15, tx_power_mW, rx_power=rx_measurements)
-        _sf = np.random.choice(LoRaParameters.SPREADING_FACTORS)
-
-        if start_with_fixed_sf:
-            _sf = start_sf
 
         lora_param = LoRaParameters(freq=np.random.choice(LoRaParameters.DEFAULT_CHANNELS),
-                                    sf=_sf,
+                                    sf=np.random.choice(LoRaParameters.SPREADING_FACTORS),
                                     bw=125,
                                     cr=5,
                                     crc_enabled=1,
                                     de_enabled=0,
                                     header_implicit_mode=0,
                                     tp=14)
+
         node = Node(node_id,
                     energy_profile,
                     lora_param,
