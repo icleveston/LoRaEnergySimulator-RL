@@ -59,6 +59,7 @@ class Gateway:
         self.avg_snr_adr = avg_snr_adr
         self.printed = printed
         self.prop_measurements = {}
+        self.current_state = None
 
     def packet_received(self, from_node, packet: UplinkMessage, now):
 
@@ -72,6 +73,8 @@ class Gateway:
         For simplification, this algorithm is executed here.
         In addition, the gateway determines the best suitable DL Rx window.
         """
+
+        self.current_state = [from_node, packet]
 
         if from_node.id not in self.packet_history:
             self.packet_history[from_node.id] = deque(maxlen=20)
@@ -166,6 +169,9 @@ class Gateway:
         time_off = time_on_air / LoRaParameters.CHANNEL_DUTY_CYCLE[freq] - time_on_air
         off_time_till = self.env.now + time_off
         return True, time_on_air, off_time_till
+
+    def get_state(self):
+        return self.current_packet
 
     def adr(self, packet: UplinkMessage):
         history = self.packet_history[packet.node.id]

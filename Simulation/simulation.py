@@ -42,16 +42,21 @@ def main(locations_file, payload_size=50, adr=True, confirmed_messages=True):
     state = None
     while True:
 
-        # Take action
+        # Get action
+        action = dqn.get(state)
 
+        # Take action
+        state, reward = gateway.take_action(action)
+
+        # Update DQN
+        dqn.train(reward)
 
         if env.peek() < simulation_time:
             env.step()
         else:
             break
 
-        # Get new state
-        state = gateway
+
         #gateway.log()
 
     # Process data
