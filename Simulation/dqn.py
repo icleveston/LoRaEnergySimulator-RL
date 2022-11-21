@@ -3,11 +3,11 @@ import datetime
 import pickle
 import torch
 import numpy as np
-import gym
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torch import nn
 from collections import deque, namedtuple
+from LoraEnvironment import LoraEnvironment
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -149,24 +149,24 @@ def update_step(policy_net, target_net, replay_mem, gamma, optimizer, loss_fn, b
     nn.utils.clip_grad_norm_(policy_net.parameters(), 2)
     optimizer.step()
 
+    return loss.item()
 
-def plot_reward(plotting_rewards):
+
+def plot_reward(plotting_rewards, num_iterations):
 
     plt.figure(figsize=(10, 8))
-    plt.plot(range(1, 801), plotting_rewards)
+    plt.plot(range(0, num_iterations), plotting_rewards)
     plt.xlabel('Training episodes')
     plt.ylabel('Acc. Episodic Reward')
-    plt.ylim([-500, -40])
     plt.grid()
     plt.legend()
-    plt.title('Acrobot v1')
     plt.show()
 
 
 def main():
 
     # Create environment
-    env = gym.make('Acrobot-v1')
+    env = LoraEnvironment()
     env.seed(0)
 
     state_space_dim = env.observation_space.shape[0]
@@ -181,14 +181,14 @@ def main():
 
     # PARAMETERS
     gamma = 0.99  # gamma parameter for the long term reward
-    replay_memory_capacity = 10000  # Replay memory capacity
+    replay_memory_capacity = 1000  # Replay memory capacity
     lr = 1e-3
-    target_net_update_steps = 10  # Number of episodes to wait before updating the target network
-    batch_size = 256  # Number of samples to take from the replay memory for each update
+    target_net_update_steps = 5  # Number of episodes to wait before updating the target network
+    batch_size = 64  # Number of samples to take from the replay memory for each update
     bad_state_penalty = 0  # Penalty to the reward when we are in a bad state (in this case when the pole falls down)
-    min_samples_for_training = 1000  # Minimum samples in the replay memory to enable the training
+    min_samples_for_training = 64  # Minimum samples in the replay memory to enable the training
     initial_value = 5
-    num_iterations = 1
+    num_iterations = 300
 
     replay_mem = ReplayMemory(replay_memory_capacity)
 
@@ -212,12 +212,12 @@ def main():
     exploration_profile = [initial_value * (exp_decay ** i) for i in range(num_iterations)]
 
     # Plot exploration profile
-    plt.figure(figsize=(12, 8))
-    plt.plot(exploration_profile)
-    plt.grid()
-    plt.xlabel('Iteration')
-    plt.ylabel('Exploration profile (Softmax temperature)')
-    plt.show()
+    # plt.figure(figsize=(12, 8))
+    # plt.plot(exploration_profile)
+    # plt.grid()
+    # plt.xlabel('Iteration')
+    # plt.ylabel('Exploration profile (Softmax temperature)')
+    # plt.show()
 
     for episode_num, tau in enumerate(tqdm(exploration_profile)):
 
@@ -250,11 +250,11 @@ def main():
             # Update the network
             # we enable the training only if we have enough samples in the replay memory,
             # otherwise the training will use the same samples too often
+            loss = 0
             if len(replay_mem) > min_samples_for_training:
-                update_step(policy_net, target_net, replay_mem, gamma, optimizer, loss_fn, batch_size)
+                loss = update_step(policy_net, target_net, replay_mem, gamma, optimizer, loss_fn, batch_size)
 
-            # Visually render the environment (disable to speed up the training)
-            env.render()
+            print(action, next_state, reward, loss)
 
             # Set the current state for the next iteration
             state = next_state
@@ -279,7 +279,7 @@ def main():
     with open(f'models/score_{filename}.pkl', 'wb') as f:
         pickle.dump(plotting_rewards, f)
 
-    plot_reward(plotting_rewards)
+    plot_reward(plotting_rewards, num_iterations)
 
 
 if __name__ == '__main__':

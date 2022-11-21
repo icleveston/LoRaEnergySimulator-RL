@@ -139,7 +139,7 @@ class Node:
         if self.printed:
             print('{}: joined the network'.format(self.id))
 
-        while True:
+        for _ in range(1):
             # added also a random wait to accommodate for any timing issues on the node itself
             random_wait = np.random.randint(0, self.MAX_DELAY_BEFORE_SLEEP_MS)
             yield self.env.timeout(random_wait)
@@ -431,7 +431,7 @@ class Node:
                 packet.ack_retries_cnt += 1
                 if (packet.ack_retries_cnt % 2) == 1:
                     dr = np.amax([self.lora_param.dr - 1, LoRaParameters.LORAMAC_TX_MIN_DATARATE])
-                    self.lora_param.change_dr_to(dr)
+                    #self.lora_param.change_dr_to(dr)
                     packet.lora_param = self.lora_param
 
                 # set packet as retransmitted packet
@@ -563,7 +563,7 @@ class Node:
         list_of_series = []
         for node in nodes:
             list_of_series.append(node.get_simulation_data())
-        return pdf.append(list_of_series)
+        return pd.concat([pd.Series(list_of_series), pdf])
 
     @staticmethod
     def get_mean_simulation_data_frame(nodes: list, name) -> pd.DataFrame:

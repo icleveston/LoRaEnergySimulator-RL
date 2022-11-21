@@ -261,7 +261,7 @@ class Gateway:
 
         return self.num_of_packet_received / packets_sent
 
-    def get_simulation_data(self, name) -> pd.Series:
+    def get_simulation_data(self) -> pd.Series:
         series = pd.Series({
             'BytesReceived': self.bytes_received,
             'DLPacketsLost': self.dl_not_schedulable,
@@ -269,5 +269,4 @@ class Gateway:
             'PacketsReceived': self.num_of_packet_received,
             'UniquePacketsReceived': self.distinct_packets_received
         })
-        series.name = name
         return series.transpose()

@@ -7,10 +7,10 @@ import pandas as pd
 from Framework.SNRModel import SNRModel
 import gc
 
-PRINT_ENABLED = True
 
 class AirInterface:
-    def __init__(self, gateway: Gateway, prop_model: PropagationModel, snr_model: SNRModel, env):
+
+    def __init__(self, gateway: Gateway, prop_model: PropagationModel, snr_model: SNRModel, env, printed):
 
         self.prop_measurements = {}
         self.num_of_packets_collided = 0
@@ -21,9 +21,10 @@ class AirInterface:
         self.prop_model = prop_model
         self.snr_model = snr_model
         self.env = env
+        self.printed = printed
 
     @staticmethod
-    def frequency_collision(p1: UplinkMessage, p2: UplinkMessage):
+    def frequency_collision(self, p1: UplinkMessage, p2: UplinkMessage):
         """frequencyCollision, conditions
                 |f1-f2| <= 120 kHz if f1 or f2 has bw 500
                 |f1-f2| <= 60 kHz if f1 or f2 has bw 250
@@ -37,39 +38,39 @@ class AirInterface:
         p2_bw = p2.lora_param.bw
 
         if abs(p1_freq - p2_freq) <= 120 and (p1_bw == 500 or p2_bw == 500):
-            if PRINT_ENABLED:
+            if self.printed:
                 print("frequency coll 500")
             return True
         elif abs(p1_freq - p2_freq) <= 60 and (p1_bw == 250 or p2_bw == 250):
-            if PRINT_ENABLED:
+            if self.printed:
                 print("frequency coll 250")
             return True
         elif abs(p1_freq - p2_freq) <= 30 and (p1_bw == 125 or p2_bw == 125):
-            if PRINT_ENABLED:
+            if self.printed:
                 print("frequency coll 125")
             return True
 
-        if PRINT_ENABLED:
+        if self.printed:
             print("no frequency coll")
         return False
 
     @staticmethod
-    def sf_collision(p1: UplinkMessage, p2: UplinkMessage):
+    def sf_collision(self, p1: UplinkMessage, p2: UplinkMessage):
         #
         # sfCollision, conditions
         #
         #       sf1 == sf2
         #
         if p1.lora_param.sf == p2.lora_param.sf:
-            if PRINT_ENABLED:
+            if self.printed:
                 print("collision sf node {} and node {}".format(p1.node.id, p2.node.id))
             return True
-        if PRINT_ENABLED:
+        if self.printed:
             print("no sf collision")
         return False
 
     @staticmethod
-    def timing_collision(me: UplinkMessage, other: UplinkMessage):
+    def timing_collision(self, me: UplinkMessage, other: UplinkMessage):
         # packet p1 collides with packet p2 when it overlaps in its critical section
 
         sym_duration = 2 ** me.lora_param.sf / (1.0 * me.lora_param.bw)
@@ -77,7 +78,7 @@ class AirInterface:
         critical_section_start = me.start_on_air + sym_duration * (num_preamble - 5)
         critical_section_end = me.start_on_air + me.my_time_on_air()
 
-        if PRINT_ENABLED:
+        if self.printed:
             print('P1 has a critical section in [{} - {}]'.format(critical_section_start, critical_section_end))
 
         other_end = other.start_on_air + other.my_time_on_air()
@@ -94,7 +95,7 @@ class AirInterface:
         critical_section_start = other.start_on_air + sym_duration * (num_preamble - 5)
         critical_section_end = other.start_on_air + other.my_time_on_air()
 
-        if PRINT_ENABLED:
+        if self.printed:
             print('P2 has a critical section in [{} - {}]'.format(critical_section_start, critical_section_end))
 
         me_end = me.start_on_air + me.my_time_on_air()
@@ -117,9 +118,9 @@ class AirInterface:
             return None
 
     @staticmethod
-    def power_collision(me: UplinkMessage, other: UplinkMessage, time_collided_nodes):
+    def power_collision(self, me: UplinkMessage, other: UplinkMessage, time_collided_nodes):
         power_threshold = 6  # dB
-        if PRINT_ENABLED:
+        if self.printed:
             print(
                 "pwr: node {0.node.id} {0.rss:3.2f} dBm node {1.node.id} {1.rss:3.2f} dBm; diff {2:3.2f} dBm".format(me,
                                                                                                                      other,
@@ -127,7 +128,7 @@ class AirInterface:
                                                                                                                          me.rss - other.rss,
                                                                                                                          2)))
         if abs(me.rss - other.rss) < power_threshold:
-            if PRINT_ENABLED:
+            if self.printed:
                 print("collision pwr both node {} and node {} (too close to each other)".format(me.node.id,
                                                                                                 other.node.id))
             if me in time_collided_nodes:
@@ -140,18 +141,18 @@ class AirInterface:
             # me will collided if also time_collided
 
             if me in time_collided_nodes:
-                if PRINT_ENABLED:
+                if self.printed:
                     print("collision pwr both node {} has collided by node {}".format(me.node.id, other.node.id))
                 me.collided = True
         else:
             # other was overpowered by me
             if other in time_collided_nodes:
-                if PRINT_ENABLED:
+                if self.printed:
                     print("collision pwr both node {} has collided by node {}".format(other.node.id, me.node.id))
                 other.collided = True
 
     def collision(self, packet) -> bool:
-        if PRINT_ENABLED:
+        if self.printed:
             print("CHECK node {} (sf:{} bw:{} freq:{:.6e}) #others: {}".format(
                 packet.node.id, packet.lora_param.sf, packet.lora_param.bw, packet.lora_param.freq,
                 len(self.packages_in_air)))
@@ -159,7 +160,7 @@ class AirInterface:
             return True
         for other in self.packages_in_air:
             if other.node.id != packet.node.id:
-                if PRINT_ENABLED:
+                if self.printed:
                     print(">> node {} (sf:{} bw:{} freq:{:.6e})".format(
                         other.node.id, other.lora_param.sf, other.lora_param.bw,
                         other.lora_param.freq))
@@ -232,8 +233,7 @@ class AirInterface:
     def get_prop_measurements(self, node_id):
         return self.prop_measurements[node_id]
 
-    def get_simulation_data(self, name) -> pd.Series:
+    def get_simulation_data(self) -> pd.Series:
         series = pd.Series([self.num_of_packets_collided, self.num_of_packets_send],
                            index=['NumberOfPacketsCollided', 'NumberOfPacketsOnAir'])
-        series.name = name
         return series.transpose()

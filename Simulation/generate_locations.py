@@ -19,4 +19,4 @@ def main(num_nodes, area_size):
 
 if __name__ == '__main__':
 
-    main(num_nodes=100, area_size=12000)
+    main(num_nodes=1, area_size=12000)
