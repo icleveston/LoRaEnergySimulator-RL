@@ -3,7 +3,10 @@ import pandas as pd
 import numpy as np
 from Framework.LoRaPacket import UplinkMessage, DownlinkMetaMessage, DownlinkMessage
 from Framework.LoRaParameters import LoRaParameters
-
+from Framework.Location import Location
+import random
+import torch
+from torch import nn
 
 def required_snr(dr):
     req_snr = 0
@@ -25,13 +28,116 @@ def required_snr(dr):
     return req_snr
 
 
+def take_action(action):
+
+    if action == 0:
+        dr = 0
+        tp = 2
+    elif action == 1:
+        dr = 1
+        tp = 2
+    elif action == 2:
+        dr = 2
+        tp = 2
+    elif action == 3:
+        dr = 3
+        tp = 2
+    elif action == 4:
+        dr = 4
+        tp = 2
+    elif action == 5:
+        dr = 5
+        tp = 2
+    elif action == 6:
+        dr = 0
+        tp = 14
+    elif action == 7:
+        dr = 1
+        tp = 14
+    elif action == 8:
+        dr = 2
+        tp = 14
+    elif action == 9:
+        dr = 3
+        tp = 14
+    elif action == 10:
+        dr = 4
+        tp = 14
+    elif action == 11:
+        dr = 5
+        tp = 14
+
+    return dr, tp
+
+def choose_action_epsilon_greedy(net, state, epsilon):
+    if epsilon > 1 or epsilon < 0:
+        raise Exception('The epsilon value must be between 0 and 1')
+
+    # Evaluate the network output from the current state
+    with torch.no_grad():
+        net.eval()
+        state = torch.tensor(state, dtype=torch.float32)  # Convert the state to tensor
+        net_out = net(state)
+
+    # Get the best action (argmax of the network output)
+    best_action = int(net_out.argmax())
+    # Get the number of possible actions
+    action_space_dim = net_out.shape[-1]
+
+    # Select a non optimal action with probability epsilon, otherwise choose the best action
+    if random.random() < epsilon:
+        # List of non-optimal actions (this list includes all the actions but the optimal one)
+        non_optimal_actions = [a for a in range(action_space_dim) if a != best_action]
+        # Select randomly from non_optimal_actions
+        action = random.choice(non_optimal_actions)
+    else:
+        # Select best action
+        action = best_action
+
+    return action, net_out.cpu().numpy()
+
+
+def choose_action_softmax(net, state, temperature):
+
+    if temperature < 0:
+        raise Exception('The temperature value must be greater than or equal to 0 ')
+
+    # If the temperature is 0, just select the best action using the eps-greedy policy with epsilon = 0
+    if temperature == 0:
+        return choose_action_epsilon_greedy(net, state, 0)
+
+    # Evaluate the network output from the current state
+    with torch.no_grad():
+        net.eval()
+        state = torch.tensor(state, dtype=torch.float32)
+        net_out = net(state)
+
+    # Apply softmax with temp
+    temperature = max(temperature, 1e-8)  # set a minimum to the temperature for numerical stability
+    softmax_out = nn.functional.softmax(net_out / temperature, dim=0).cpu().numpy()
+
+    # Sample the action using softmax output as mass pdf
+    all_possible_actions = np.arange(0, softmax_out.shape[-1])
+
+    # this samples a random element from "all_possible_actions" with the probability distribution p (softmax_out in this case)
+    action = np.random.choice(all_possible_actions, p=softmax_out)
+
+    return action, net_out.cpu().numpy()
+
+
 class Gateway:
     SENSITIVITY = {6: -121, 7: -126.5, 8: -129, 9: -131.5, 10: -134, 11: -136.5, 12: -139.5}
 
     def __init__(self,
                  env,
                  location,
-                 fast_adr_on=False,
+                 policy_net,
+                 replay_mem,
+                 tau,
+                 seed,
+                 adr_rl,
+                 adr,
+                 fast_adr_on=True,
                  max_snr_adr=True,
                  min_snr_adr=False,
                  avg_snr_adr=False,
@@ -40,9 +146,16 @@ class Gateway:
 
         self.bytes_received = 0
         self.location = location
+        self.policy_net = policy_net
+        self.replay_mem = replay_mem
+        self.tau = tau
+        self.enable_adr_rl = adr_rl
+        self.enable_adr = adr
         self.packet_history = dict()
         self.packet_num_received_from = dict()
+        self.node_energy_per_bit = dict()
         self.distinct_packets_received = 0
+        self.retransmission = 0
         self.distinct_bytes_received_from = dict()
         self.last_distinct_packets_received_from = dict()
         self.time_off = dict()
@@ -59,7 +172,29 @@ class Gateway:
         self.avg_snr_adr = avg_snr_adr
         self.printed = printed
         self.prop_measurements = {}
-        self.current_state = None
+        self.sf = []
+        self.tp = []
+        self.scores = []
+        self.retransmissions = []
+        self.time_on_air = 0
+
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.random.manual_seed(seed)
+
+        self.action = 0
+        self.state = np.array([
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ])
+
+    def get_score(self):
+
+        return -self.retransmission/(1 + self.num_of_packet_received) - self.time_on_air/self.num_of_packet_received
 
     def packet_received(self, from_node, packet: UplinkMessage, now):
 
@@ -74,11 +209,10 @@ class Gateway:
         In addition, the gateway determines the best suitable DL Rx window.
         """
 
-        self.current_state = [from_node, packet]
-
         if from_node.id not in self.packet_history:
             self.packet_history[from_node.id] = deque(maxlen=20)
             self.packet_num_received_from[from_node.id] = 0
+            self.node_energy_per_bit[from_node.id] = 0
             self.distinct_bytes_received_from[from_node.id] = 0
 
         if packet.rss < self.SENSITIVITY[packet.lora_param.sf] or packet.snr < required_snr(packet.lora_param.dr):
@@ -89,6 +223,8 @@ class Gateway:
 
         self.bytes_received += packet.payload_size
         self.num_of_packet_received += 1
+        self.retransmission += packet.ack_retries_cnt
+        self.time_on_air += packet.my_time_on_air()/10000
 
         # everytime a distinct message is received (i.e. id is diff from previous message
         if from_node.id not in self.last_distinct_packets_received_from:
@@ -100,8 +236,39 @@ class Gateway:
 
         self.packet_history[from_node.id].append(packet.snr)
 
-        if from_node.adr:
-            downlink_msg.adr_param = self.adr(packet)
+        if self.enable_adr:
+
+            if self.enable_adr_rl:
+
+                next_state = np.array([
+                    packet.node.id/100,
+                    packet.lora_param.dr / 5,
+                    packet.my_time_on_air()/10000,
+                    packet.snr/100,
+                    packet.ack_retries_cnt/8,
+                    Location.distance(packet.node.location, self.location)/2500,
+                ])
+
+                reward = self.get_score()
+
+                # Update the replay memory
+                self.replay_mem.push(self.state, self.action, next_state, reward)
+
+                #print(self.action, next_state, reward, self.retransmission)
+
+                # Execute action
+                downlink_msg.adr_param = self.adr_rl(next_state)
+
+                self.state = next_state
+
+            else:
+
+                downlink_msg.adr_param = self.adr(packet)
+
+        self.sf.append(packet.lora_param.sf)
+        self.tp.append(packet.lora_param.tp)
+        self.scores.append(self.get_score())
+        self.retransmissions.append(self.retransmission)
 
         # first compute if DC can be done for RX1 and RX2
         possible_rx1, time_on_air_rx1, off_time_till_rx1 = self.check_duty_cycle(12, packet.lora_param.sf,
@@ -170,8 +337,14 @@ class Gateway:
         off_time_till = self.env.now + time_off
         return True, time_on_air, off_time_till
 
-    def get_state(self):
-        return self.current_packet
+    def adr_rl(self, state):
+
+        # Choose the action following the policy
+        self.action, _ = choose_action_softmax(self.policy_net, state, temperature=self.tau)
+
+        new_dr, new_tx_power = take_action(self.action)
+
+        return {'dr': new_dr, 'tp': new_tx_power}
 
     def adr(self, packet: UplinkMessage):
         history = self.packet_history[packet.node.id]

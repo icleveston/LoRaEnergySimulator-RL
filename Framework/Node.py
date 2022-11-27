@@ -139,7 +139,7 @@ class Node:
         if self.printed:
             print('{}: joined the network'.format(self.id))
 
-        for _ in range(1):
+        for _ in range(10):
             # added also a random wait to accommodate for any timing issues on the node itself
             random_wait = np.random.randint(0, self.MAX_DELAY_BEFORE_SLEEP_MS)
             yield self.env.timeout(random_wait)
@@ -426,12 +426,16 @@ class Node:
     def dl_message_lost(self):
         self.num_no_downlink += 1
         packet = self.packet_to_sent
+        #print(f"packet {packet.node.id}: {packet.is_confirmed_message}")
+
+        #print(f"Message Lost DR: {self.lora_param.dr}")
+
         if packet.is_confirmed_message:
             if packet.ack_retries_cnt < LoRaParameters.MAX_ACK_RETRIES:
                 packet.ack_retries_cnt += 1
                 if (packet.ack_retries_cnt % 2) == 1:
                     dr = np.amax([self.lora_param.dr - 1, LoRaParameters.LORAMAC_TX_MIN_DATARATE])
-                    #self.lora_param.change_dr_to(dr)
+                    self.lora_param.change_dr_to(dr)
                     packet.lora_param = self.lora_param
 
                 # set packet as retransmitted packet
@@ -442,8 +446,10 @@ class Node:
                 self.num_retransmission += 1
 
                 if downlink_message is None:
+                    #print(self.total_energy_consumed())
                     yield self.env.process(self.dl_message_lost())
                 else:
+                    #print(self.total_energy_consumed())
                     yield self.env.process(self.process_downlink_message(downlink_message, packet))
 
             else:
@@ -478,6 +484,7 @@ class Node:
             elif new_state == NodeState.TX:
                 power_consumed_in_state_mW = self.energy_profile.tx_power_mW[packet.lora_param.tp]*self.power_gain
                 energy_consumed_in_state_mJ = power_consumed_in_state_mW * (packet.my_time_on_air() / 1000)
+                #print(f"Tx{self.num_tx_state_changes} {energy_consumed_in_state_mJ}")
                 self.num_tx_state_changes += 1
             elif new_state == NodeState.RADIO_PRE_RX:
                 power_consumed_in_state_mW = self.energy_profile.rx_power['pre_mW']

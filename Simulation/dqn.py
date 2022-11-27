@@ -3,34 +3,18 @@ import datetime
 import pickle
 import torch
 import numpy as np
+import gc
+import math
+import multiprocessing as mp
+from multiprocessing import set_start_method
+import os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torch import nn
-from collections import deque, namedtuple
+from ReplayMemory import ReplayMemory
 from LoraEnvironment import LoraEnvironment
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-class ReplayMemory(object):
-
-    def __init__(self, capacity):
-        # Define a queue with maxlen "capacity"
-        self.memory = deque(maxlen=capacity)
-
-    def push(self, state, action, next_state, reward):
-        # Add the tuple (state, action, next_state, reward) to the queue
-        self.memory.append((state, action, next_state, reward))
-
-    def sample(self, batch_size):
-        # Get all the samples if the requested batch_size is higher than the number of sample currently in the memory
-        batch_size = min(batch_size, len(self))
-
-        # Randomly select "batch_size" samples and return the selection
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)  # Return the number of samples currently stored in the memory
 
 
 class DQN(nn.Module):
@@ -49,61 +33,6 @@ class DQN(nn.Module):
     def forward(self, x):
         x = x.to(device)
         return self.linear(x)
-
-
-def choose_action_epsilon_greedy(net, state, epsilon):
-    if epsilon > 1 or epsilon < 0:
-        raise Exception('The epsilon value must be between 0 and 1')
-
-    # Evaluate the network output from the current state
-    with torch.no_grad():
-        net.eval()
-        state = torch.tensor(state, dtype=torch.float32)  # Convert the state to tensor
-        net_out = net(state)
-
-    # Get the best action (argmax of the network output)
-    best_action = int(net_out.argmax())
-    # Get the number of possible actions
-    action_space_dim = net_out.shape[-1]
-
-    # Select a non optimal action with probability epsilon, otherwise choose the best action
-    if random.random() < epsilon:
-        # List of non-optimal actions (this list includes all the actions but the optimal one)
-        non_optimal_actions = [a for a in range(action_space_dim) if a != best_action]
-        # Select randomly from non_optimal_actions
-        action = random.choice(non_optimal_actions)
-    else:
-        # Select best action
-        action = best_action
-
-    return action, net_out.cpu().numpy()
-
-
-def choose_action_softmax(net, state, temperature):
-    if temperature < 0:
-        raise Exception('The temperature value must be greater than or equal to 0 ')
-
-    # If the temperature is 0, just select the best action using the eps-greedy policy with epsilon = 0
-    if temperature == 0:
-        return choose_action_epsilon_greedy(net, state, 0)
-
-    # Evaluate the network output from the current state
-    with torch.no_grad():
-        net.eval()
-        state = torch.tensor(state, dtype=torch.float32)
-        net_out = net(state)
-
-    # Apply softmax with temp
-    temperature = max(temperature, 1e-8)  # set a minimum to the temperature for numerical stability
-    softmax_out = nn.functional.softmax(net_out / temperature, dim=0).cpu().numpy()
-
-    # Sample the action using softmax output as mass pdf
-    all_possible_actions = np.arange(0, softmax_out.shape[-1])
-
-    # this samples a random element from "all_possible_actions" with the probability distribution p (softmax_out in this case)
-    action = np.random.choice(all_possible_actions, p=softmax_out)
-
-    return action, net_out.cpu().numpy()
 
 
 def update_step(policy_net, target_net, replay_mem, gamma, optimizer, loss_fn, batch_size):
@@ -163,32 +92,30 @@ def plot_reward(plotting_rewards, num_iterations):
     plt.show()
 
 
+def run(args):
+    return LoraEnvironment(args[0], args[1], args[2]).run()
+
+
 def main():
+    set_start_method('spawn')
 
-    # Create environment
-    env = LoraEnvironment()
-    env.seed(0)
-
-    state_space_dim = env.observation_space.shape[0]
-    action_space_dim = env.action_space.n
-
-    print(f"STATE SPACE SIZE: {state_space_dim}")
-    print(f"ACTION SPACE SIZE: {action_space_dim}")
+    state_space_dim = 6
+    action_space_dim = 12
 
     # Set random seeds
     torch.manual_seed(0)
     np.random.seed(0)
 
     # PARAMETERS
-    gamma = 0.99  # gamma parameter for the long term reward
-    replay_memory_capacity = 1000  # Replay memory capacity
+    gamma = 0.9  # gamma parameter for the long term reward
+    replay_memory_capacity = 20000  # Replay memory capacity
     lr = 1e-3
     target_net_update_steps = 5  # Number of episodes to wait before updating the target network
     batch_size = 64  # Number of samples to take from the replay memory for each update
     bad_state_penalty = 0  # Penalty to the reward when we are in a bad state (in this case when the pole falls down)
     min_samples_for_training = 64  # Minimum samples in the replay memory to enable the training
-    initial_value = 5
-    num_iterations = 300
+    initial_value = 3
+    num_iterations = 100
 
     replay_mem = ReplayMemory(replay_memory_capacity)
 
@@ -211,7 +138,7 @@ def main():
     exp_decay = np.exp(-np.log(initial_value) / num_iterations * 6)
     exploration_profile = [initial_value * (exp_decay ** i) for i in range(num_iterations)]
 
-    # Plot exploration profile
+    #Plot exploration profile
     # plt.figure(figsize=(12, 8))
     # plt.plot(exploration_profile)
     # plt.grid()
@@ -221,43 +148,21 @@ def main():
 
     for episode_num, tau in enumerate(tqdm(exploration_profile)):
 
-        # Reset the environment and get the initial state
-        state = env.reset()
-        # Reset the score. The final score will be the total amount of steps before the pole falls
+        #pool = mp.Pool(math.floor(mp.cpu_count()))
+
         score = 0
-        done = False
 
-        # Go on until the pole falls off
-        while not done:
+        # Run environment
+        args = [[policy_net, tau, 2], [policy_net, tau, 3]]
+        #r_list = pool.map(func=run, iterable=args)
+        r_list = [run(args[0])]
 
-            # Choose the action following the policy
-            action, q_values = choose_action_softmax(policy_net, state, temperature=tau)
+        for _r in r_list:
+            score_r, replay = _r
+            replay_mem.extend(replay)
+            score += score_r
 
-            # Apply the action and get the next state, the reward and a flag "done" that is True if the game is ended
-            next_state, reward, done, info = env.step(action)
-
-            # Update the final score (+1 for each step)
-            score += reward
-
-            # Apply penalty for bad state
-            if done:  # if the pole has fallen down
-                reward += bad_state_penalty
-                next_state = None
-
-            # Update the replay memory
-            replay_mem.push(state, action, next_state, reward)
-
-            # Update the network
-            # we enable the training only if we have enough samples in the replay memory,
-            # otherwise the training will use the same samples too often
-            loss = 0
-            if len(replay_mem) > min_samples_for_training:
-                loss = update_step(policy_net, target_net, replay_mem, gamma, optimizer, loss_fn, batch_size)
-
-            print(action, next_state, reward, loss)
-
-            # Set the current state for the next iteration
-            state = next_state
+        print(f"Length replay: {len(replay_mem)}")
 
         # Update the target network every target_net_update_steps episodes
         if episode_num % target_net_update_steps == 0:
@@ -268,9 +173,11 @@ def main():
 
         plotting_rewards.append(score)
 
-        print(f"EPISODE: {episode_num + 1} - FINAL SCORE: {score} - Temperature: {tau}")  # Print the final score
+        if len(replay_mem) > min_samples_for_training:
+            for _ in range(3000):
+                update_step(policy_net, target_net, replay_mem, gamma, optimizer, loss_fn, batch_size)
 
-    env.close()
+        print(f"EPISODE: {episode_num + 1} - FINAL SCORE: {score} - Temperature: {tau}")
 
     filename = datetime.datetime.now()
 
