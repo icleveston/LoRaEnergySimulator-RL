@@ -24,7 +24,7 @@ class AirInterface:
         self.printed = printed
 
     @staticmethod
-    def frequency_collision(self, p1: UplinkMessage, p2: UplinkMessage):
+    def frequency_collision(p1: UplinkMessage, p2: UplinkMessage):
         """frequencyCollision, conditions
                 |f1-f2| <= 120 kHz if f1 or f2 has bw 500
                 |f1-f2| <= 60 kHz if f1 or f2 has bw 250
@@ -38,39 +38,30 @@ class AirInterface:
         p2_bw = p2.lora_param.bw
 
         if abs(p1_freq - p2_freq) <= 120 and (p1_bw == 500 or p2_bw == 500):
-            if self.printed:
-                print("frequency coll 500")
+
             return True
         elif abs(p1_freq - p2_freq) <= 60 and (p1_bw == 250 or p2_bw == 250):
-            if self.printed:
-                print("frequency coll 250")
             return True
         elif abs(p1_freq - p2_freq) <= 30 and (p1_bw == 125 or p2_bw == 125):
-            if self.printed:
-                print("frequency coll 125")
             return True
 
-        if self.printed:
-            print("no frequency coll")
         return False
 
     @staticmethod
-    def sf_collision(self, p1: UplinkMessage, p2: UplinkMessage):
+    def sf_collision(p1: UplinkMessage, p2: UplinkMessage):
         #
         # sfCollision, conditions
         #
         #       sf1 == sf2
         #
         if p1.lora_param.sf == p2.lora_param.sf:
-            if self.printed:
-                print("collision sf node {} and node {}".format(p1.node.id, p2.node.id))
+            #print("collision sf node {} and node {}".format(p1.node.id, p2.node.id))
             return True
-        if self.printed:
-            print("no sf collision")
+
         return False
 
     @staticmethod
-    def timing_collision(self, me: UplinkMessage, other: UplinkMessage):
+    def timing_collision(me: UplinkMessage, other: UplinkMessage):
         # packet p1 collides with packet p2 when it overlaps in its critical section
 
         sym_duration = 2 ** me.lora_param.sf / (1.0 * me.lora_param.bw)
@@ -78,8 +69,7 @@ class AirInterface:
         critical_section_start = me.start_on_air + sym_duration * (num_preamble - 5)
         critical_section_end = me.start_on_air + me.my_time_on_air()
 
-        if self.printed:
-            print('P1 has a critical section in [{} - {}]'.format(critical_section_start, critical_section_end))
+        #print('P1 has a critical section in [{} - {}]'.format(critical_section_start, critical_section_end))
 
         other_end = other.start_on_air + other.my_time_on_air()
 
@@ -95,8 +85,7 @@ class AirInterface:
         critical_section_start = other.start_on_air + sym_duration * (num_preamble - 5)
         critical_section_end = other.start_on_air + other.my_time_on_air()
 
-        if self.printed:
-            print('P2 has a critical section in [{} - {}]'.format(critical_section_start, critical_section_end))
+        #print('P2 has a critical section in [{} - {}]'.format(critical_section_start, critical_section_end))
 
         me_end = me.start_on_air + me.my_time_on_air()
 
@@ -118,19 +107,16 @@ class AirInterface:
             return None
 
     @staticmethod
-    def power_collision(self, me: UplinkMessage, other: UplinkMessage, time_collided_nodes):
+    def power_collision(me: UplinkMessage, other: UplinkMessage, time_collided_nodes):
         power_threshold = 6  # dB
-        if self.printed:
-            print(
-                "pwr: node {0.node.id} {0.rss:3.2f} dBm node {1.node.id} {1.rss:3.2f} dBm; diff {2:3.2f} dBm".format(me,
-                                                                                                                     other,
-                                                                                                                     round(
-                                                                                                                         me.rss - other.rss,
-                                                                                                                         2)))
+        #print("pwr: node {0.node.id} {0.rss:3.2f} dBm node {1.node.id} {1.rss:3.2f} dBm; diff {2:3.2f} dBm".format(me,
+        #                                                                                                             other,
+        #                                                                                                             round(
+        #                                                                                                                 me.rss - other.rss,
+        #                                                                                                                 2)))
         if abs(me.rss - other.rss) < power_threshold:
-            if self.printed:
-                print("collision pwr both node {} and node {} (too close to each other)".format(me.node.id,
-                                                                                                other.node.id))
+            #print("collision pwr both node {} and node {} (too close to each other)".format(me.node.id,
+            #                                                                                    other.node.id))
             if me in time_collided_nodes:
                 me.collided = True
             if other in time_collided_nodes:
@@ -141,14 +127,12 @@ class AirInterface:
             # me will collided if also time_collided
 
             if me in time_collided_nodes:
-                if self.printed:
-                    print("collision pwr both node {} has collided by node {}".format(me.node.id, other.node.id))
+                #print("collision pwr both node {} has collided by node {}".format(me.node.id, other.node.id))
                 me.collided = True
         else:
             # other was overpowered by me
             if other in time_collided_nodes:
-                if self.printed:
-                    print("collision pwr both node {} has collided by node {}".format(other.node.id, me.node.id))
+                #print("collision pwr both node {} has collided by node {}".format(other.node.id, me.node.id))
                 other.collided = True
 
     def collision(self, packet) -> bool:
@@ -208,6 +192,7 @@ class AirInterface:
         collided = self.collision(packet)
         if collided:
             self.num_of_packets_collided += 1
+            #print(f"Collided: {self.num_of_packets_collided}")
             # print('Our packet has collided')
         self.packages_in_air.remove(packet)
         gc.collect()
